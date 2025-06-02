@@ -7,6 +7,7 @@ import Register from './components/Register';
 import Chat from './components/Chat';
 import VideoCall from './components/VideoCall';
 import Profile from './components/Profile';
+import Landing from './pages/Landing';
 import { useAuth } from './context/AuthContext';
 
 const PrivateRoute = ({ children }) => {
@@ -26,14 +27,15 @@ const App = () => {
         <SocketProvider>
           <div className="min-h-screen bg-gray-100">
             <Routes>
+              <Route path="/" element={<Landing />} />
               <Route path="/login" element={<Login />} />
               <Route path="/register" element={<Register />} />
               <Route
-                path="/"
+                path="/chat"
                 element={
                   <PrivateRoute>
                     <div className="container mx-auto p-4">
-                      <h1 className="text-2xl font-bold mb-4">Chat App</h1>
+                      <h1 className="text-2xl font-bold mb-4">NexusChat</h1>
                       <Chat />
                     </div>
                   </PrivateRoute>
