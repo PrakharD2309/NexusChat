@@ -227,4 +227,5 @@ class CloudBackupService {
   }
 }
 
+// Export an instance of the service
 module.exports = new CloudBackupService(); 

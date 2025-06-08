@@ -150,7 +150,21 @@ const userSchema = new mongoose.Schema({
     lastActive: Date
   }
 }, {
-  timestamps: true
+  timestamps: true,
+  toJSON: {
+    transform: function(doc, ret) {
+      ret.id = ret._id;
+      delete ret._id;
+      delete ret.__v;
+      delete ret.password;
+      delete ret.verificationToken;
+      delete ret.verificationExpires;
+      delete ret.twoFactorSecret;
+      delete ret.twoFactorBackupCodes;
+      delete ret.sessions;
+      return ret;
+    }
+  }
 });
 
 // Indexes
@@ -174,15 +188,15 @@ userSchema.methods.comparePassword = async function(candidatePassword) {
 
 userSchema.methods.generateAuthToken = async function() {
   const token = jwt.sign(
-    { _id: this._id.toString() },
-    process.env.JWT_SECRET,
+    { userId: this._id },
+    process.env.JWT_SECRET || 'your-secret-key',
     { expiresIn: '7d' }
   );
   
   this.sessions.push({
     token,
     device: 'web',
-    ipAddress: '127.0.0.1', // This should be set from the request
+    ipAddress: '127.0.0.1',
     lastActive: new Date()
   });
   
@@ -298,4 +312,6 @@ userSchema.methods.updateStats = async function() {
   return this.save();
 };
 
-module.exports = mongoose.model('User', userSchema); 
+const User = mongoose.model('User', userSchema);
+
+module.exports = User; 

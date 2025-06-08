@@ -1,9 +1,11 @@
+require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const http = require('http');
-const socketIo = require('socket.io');
+const socketIO = require('socket.io');
 const path = require('path');
+const fs = require('fs');
 const validateEnv = require('./config/validateEnv');
 const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');
@@ -20,27 +22,82 @@ const cloudBackupRoutes = require('./routes/cloudBackup');
 const reactionRoutes = require('./routes/reactions');
 const threadRoutes = require('./routes/threads');
 const forwardRoutes = require('./routes/forward');
-const { setupSocketHandlers } = require('./socket');
-const fileCleanupService = require('./services/fileCleanup');
+const socketService = require('./services/socketService');
+const fileCleanupService = require('./services/fileCleanupService');
 
 // Validate environment variables
 validateEnv();
 
+// Create uploads directory if it doesn't exist
+const uploadsDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
 const app = express();
 const server = http.createServer(app);
-const io = socketIo(server, {
+
+// Initialize socket.io
+const io = socketIO(server, {
   cors: {
-    origin: process.env.FRONTEND_URL,
-    methods: ['GET', 'POST']
+    origin: process.env.CLIENT_URL,
+    methods: ['GET', 'POST'],
+    credentials: true
   }
+});
+
+// Set io instance in socket service
+socketService.setIO(io);
+
+// Make io accessible to routes
+app.set('io', io);
+
+// Socket.io connection handling
+io.on('connection', (socket) => {
+  console.log('User connected:', socket.id);
+
+  // Join user's room
+  socket.on('join', (userId) => {
+    socket.join(userId);
+    console.log(`User ${userId} joined their room`);
+  });
+
+  // Leave user's room
+  socket.on('leave', (userId) => {
+    socket.leave(userId);
+    console.log(`User ${userId} left their room`);
+  });
+
+  // Handle disconnection
+  socket.on('disconnect', () => {
+    console.log('User disconnected:', socket.id);
+  });
 });
 
 // Middleware
 app.use(cors({
-  origin: process.env.FRONTEND_URL,
+  origin: process.env.CLIENT_URL,
   credentials: true
 }));
-app.use(express.json());
+
+// Body parser middleware
+app.use(express.json({ 
+  strict: false,
+  limit: '10mb'
+}));
+app.use(express.urlencoded({ 
+  extended: true,
+  limit: '10mb'
+}));
+
+// Debug middleware to log request bodies
+app.use((req, res, next) => {
+  if (req.method === 'POST' || req.method === 'PUT') {
+    console.log('Request body:', req.body);
+  }
+  next();
+});
+
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Routes
@@ -63,7 +120,10 @@ app.use('/api/forward', forwardRoutes);
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error(err.stack);
-  res.status(500).json({ message: 'Something went wrong!' });
+  res.status(500).json({ 
+    message: 'Something went wrong!',
+    error: process.env.NODE_ENV === 'development' ? err.message : undefined
+  });
 });
 
 // Connect to MongoDB
@@ -72,21 +132,16 @@ mongoose.connect(process.env.MONGODB_URI)
     console.log('Connected to MongoDB');
     // Start file cleanup service
     fileCleanupService.start();
+    // Start server
+    const PORT = process.env.PORT || 5000;
+    server.listen(PORT, () => {
+      console.log(`Server running on port ${PORT}`);
+    });
   })
   .catch(err => {
     console.error('MongoDB connection error:', err);
     process.exit(1);
   });
-
-// Setup Socket.IO
-app.set('io', io);
-setupSocketHandlers(io);
-
-// Start server
-const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
 
 // Handle unhandled promise rejections
 process.on('unhandledRejection', (err) => {

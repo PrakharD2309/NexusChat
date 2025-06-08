@@ -1,42 +1,43 @@
 const mongoose = require('mongoose');
 
 const callHistorySchema = new mongoose.Schema({
-  caller: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
-  },
-  recipient: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
-  },
-  startTime: {
-    type: Date,
-    required: true
-  },
-  endTime: {
-    type: Date
-  },
-  duration: {
-    type: Number // in seconds
-  },
-  status: {
+  roomId: {
     type: String,
-    enum: ['missed', 'completed', 'rejected'],
     required: true
   },
   type: {
     type: String,
-    enum: ['audio', 'video'],
+    enum: ['video', 'audio'],
     required: true
+  },
+  duration: {
+    type: Number,
+    required: true
+  },
+  participants: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  }],
+  startTime: {
+    type: Date,
+    default: Date.now
+  },
+  endTime: {
+    type: Date,
+    default: Date.now
+  },
+  status: {
+    type: String,
+    enum: ['completed', 'missed', 'rejected'],
+    default: 'completed'
   }
 }, {
   timestamps: true
 });
 
 // Indexes for faster queries
-callHistorySchema.index({ caller: 1, recipient: 1, startTime: -1 });
+callHistorySchema.index({ roomId: 1 });
 callHistorySchema.index({ status: 1 });
 
 const CallHistory = mongoose.model('CallHistory', callHistorySchema);

@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
 function Register() {
-  const [name, setName] = useState('');
+  const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -22,10 +22,17 @@ function Register() {
     try {
       setError('');
       setLoading(true);
-      await register(name, email, password);
+      const userData = {
+        username: username.trim(),
+        email: email.trim(),
+        password: password
+      };
+      console.log('Sending registration data:', userData);
+      await register(userData);
       navigate('/chat');
     } catch (err) {
-      setError('Failed to create an account');
+      console.error('Registration error:', err);
+      setError(err.message || 'Failed to create an account');
     }
     setLoading(false);
   };
@@ -46,16 +53,16 @@ function Register() {
           )}
           <div className="rounded-md shadow-sm -space-y-px">
             <div>
-              <label htmlFor="name" className="sr-only">Full name</label>
+              <label htmlFor="username" className="sr-only">Username</label>
               <input
-                id="name"
-                name="name"
+                id="username"
+                name="username"
                 type="text"
                 required
                 className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-t-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 focus:z-10 sm:text-sm"
-                placeholder="Full name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
+                placeholder="Username"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
               />
             </div>
             <div>

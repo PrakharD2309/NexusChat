@@ -1,209 +1,307 @@
-import React, { useEffect, useRef, useState } from 'react';
-import Peer from 'simple-peer';
+import React, { useState, useEffect, useRef } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
 import { useSocket } from '../context/SocketContext';
 import { useAuth } from '../context/AuthContext';
+import axios from 'axios';
 
-const VideoCall = ({ roomId, onEndCall }) => {
-  const [stream, setStream] = useState(null);
-  const [receivingCall, setReceivingCall] = useState(false);
-  const [caller, setCaller] = useState('');
-  const [callerSignal, setCallerSignal] = useState();
-  const [callAccepted, setCallAccepted] = useState(false);
-  const [isMuted, setIsMuted] = useState(false);
-  const [isVideoOff, setIsVideoOff] = useState(false);
-  const [callEnded, setCallEnded] = useState(false);
-  const [callRejected, setCallRejected] = useState(false);
-
-  const myVideo = useRef();
-  const userVideo = useRef();
-  const connectionRef = useRef();
+const VideoCall = () => {
+  const { roomId } = useParams();
+  const navigate = useNavigate();
   const { socket } = useSocket();
   const { user } = useAuth();
+  
+  const [isVideoEnabled, setIsVideoEnabled] = useState(true);
+  const [isAudioEnabled, setIsAudioEnabled] = useState(true);
+  const [isScreenSharing, setIsScreenSharing] = useState(false);
+  const [isCallActive, setIsCallActive] = useState(false);
+  const [participants, setParticipants] = useState([]);
+  const [callDuration, setCallDuration] = useState(0);
+  
+  const localVideoRef = useRef(null);
+  const remoteVideoRef = useRef(null);
+  const peerConnection = useRef(null);
+  const localStream = useRef(null);
+  const screenStream = useRef(null);
+  const timerRef = useRef(null);
 
   useEffect(() => {
-    // Get user media
-    navigator.mediaDevices.getUserMedia({ video: true, audio: true })
-      .then((currentStream) => {
-        setStream(currentStream);
-        if (myVideo.current) {
-          myVideo.current.srcObject = currentStream;
-        }
-      })
-      .catch((err) => {
-        console.error('Error accessing media devices:', err);
-      });
+    if (!socket || !user) return;
+
+    // Initialize media devices
+    initializeMediaDevices();
 
     // Socket event listeners
-    socket.on('callUser', (data) => {
-      setReceivingCall(true);
-      setCaller(data.from);
-      setCallerSignal(data.signal);
-    });
+    socket.on('user-joined', handleUserJoined);
+    socket.on('user-left', handleUserLeft);
+    socket.on('offer', handleOffer);
+    socket.on('answer', handleAnswer);
+    socket.on('ice-candidate', handleIceCandidate);
 
-    socket.on('callEnded', () => {
-      leaveCall();
-    });
+    // Join room
+    socket.emit('join-room', { roomId, userId: user._id });
 
-    socket.on('callRejected', () => {
-      setCallRejected(true);
-      setTimeout(() => {
-        leaveCall();
-      }, 2000);
-    });
+    // Start call timer
+    startCallTimer();
 
     return () => {
-      if (stream) {
-        stream.getTracks().forEach(track => track.stop());
-      }
-      socket.off('callUser');
-      socket.off('callEnded');
-      socket.off('callRejected');
+      cleanup();
     };
-  }, [socket]);
+  }, [socket, user, roomId]);
 
-  const callUser = (id) => {
-    const peer = new Peer({
-      initiator: true,
-      trickle: false,
-      stream: stream
-    });
-
-    peer.on('signal', (data) => {
-      socket.emit('callUser', {
-        userToCall: id,
-        signalData: data,
-        from: user.id,
-        name: user.name
+  const initializeMediaDevices = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: isVideoEnabled,
+        audio: isAudioEnabled
       });
-    });
-
-    peer.on('stream', (remoteStream) => {
-      if (userVideo.current) {
-        userVideo.current.srcObject = remoteStream;
+      
+      localStream.current = stream;
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = stream;
       }
-    });
 
-    socket.on('callAccepted', (signal) => {
-      setCallAccepted(true);
-      peer.signal(signal);
-    });
-
-    connectionRef.current = peer;
+      // Initialize WebRTC
+      initializePeerConnection();
+    } catch (error) {
+      console.error('Error accessing media devices:', error);
+    }
   };
 
-  const answerCall = () => {
-    setCallAccepted(true);
-    const peer = new Peer({
-      initiator: false,
-      trickle: false,
-      stream: stream
+  const initializePeerConnection = () => {
+    const configuration = {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' }
+      ]
+    };
+
+    peerConnection.current = new RTCPeerConnection(configuration);
+
+    // Add local stream tracks to peer connection
+    localStream.current.getTracks().forEach(track => {
+      peerConnection.current.addTrack(track, localStream.current);
     });
 
-    peer.on('signal', (data) => {
-      socket.emit('answerCall', { signal: data, to: caller });
-    });
-
-    peer.on('stream', (remoteStream) => {
-      if (userVideo.current) {
-        userVideo.current.srcObject = remoteStream;
+    // Handle ICE candidates
+    peerConnection.current.onicecandidate = (event) => {
+      if (event.candidate) {
+        socket.emit('ice-candidate', {
+          roomId,
+          candidate: event.candidate
+        });
       }
-    });
+    };
 
-    peer.signal(callerSignal);
-    connectionRef.current = peer;
+    // Handle incoming tracks
+    peerConnection.current.ontrack = (event) => {
+      if (remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = event.streams[0];
+      }
+    };
   };
 
-  const leaveCall = () => {
-    setCallAccepted(false);
-    setReceivingCall(false);
-    setCallEnded(true);
-    if (connectionRef.current) {
-      connectionRef.current.destroy();
-    }
-    if (stream) {
-      stream.getTracks().forEach(track => track.stop());
-    }
-    socket.emit('endCall', { userToCall: caller });
-    onEndCall();
-  };
-
-  const rejectCall = () => {
-    socket.emit('rejectCall', { userToCall: caller });
-    setReceivingCall(false);
-    onEndCall();
-  };
-
-  const toggleMute = () => {
-    if (stream) {
-      stream.getAudioTracks().forEach(track => {
-        track.enabled = !track.enabled;
+  const handleUserJoined = async ({ userId }) => {
+    try {
+      const offer = await peerConnection.current.createOffer();
+      await peerConnection.current.setLocalDescription(offer);
+      socket.emit('offer', {
+        roomId,
+        offer,
+        to: userId
       });
-      setIsMuted(!isMuted);
+    } catch (error) {
+      console.error('Error creating offer:', error);
+    }
+  };
+
+  const handleUserLeft = ({ userId }) => {
+    setParticipants(prev => prev.filter(p => p.userId !== userId));
+  };
+
+  const handleOffer = async ({ offer, from }) => {
+    try {
+      await peerConnection.current.setRemoteDescription(new RTCSessionDescription(offer));
+      const answer = await peerConnection.current.createAnswer();
+      await peerConnection.current.setLocalDescription(answer);
+      socket.emit('answer', {
+        roomId,
+        answer,
+        to: from
+      });
+    } catch (error) {
+      console.error('Error handling offer:', error);
+    }
+  };
+
+  const handleAnswer = async ({ answer }) => {
+    try {
+      await peerConnection.current.setRemoteDescription(new RTCSessionDescription(answer));
+    } catch (error) {
+      console.error('Error handling answer:', error);
+    }
+  };
+
+  const handleIceCandidate = async ({ candidate }) => {
+    try {
+      await peerConnection.current.addIceCandidate(new RTCIceCandidate(candidate));
+    } catch (error) {
+      console.error('Error adding ICE candidate:', error);
     }
   };
 
   const toggleVideo = () => {
-    if (stream) {
-      stream.getVideoTracks().forEach(track => {
-        track.enabled = !track.enabled;
-      });
-      setIsVideoOff(!isVideoOff);
+    if (localStream.current) {
+      const videoTrack = localStream.current.getVideoTracks()[0];
+      if (videoTrack) {
+        videoTrack.enabled = !videoTrack.enabled;
+        setIsVideoEnabled(videoTrack.enabled);
+      }
     }
   };
 
-  return (
-    <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
-      <div className="bg-gray-900 rounded-lg p-6 w-full max-w-4xl">
-        {callRejected && (
-          <div className="absolute top-4 left-1/2 transform -translate-x-1/2 bg-red-500 text-white px-4 py-2 rounded-lg">
-            Call was rejected
-          </div>
-        )}
-        
-        <div className="grid grid-cols-2 gap-4 mb-4">
-          <div className="relative">
-            <video
-              playsInline
-              muted
-              ref={myVideo}
-              autoPlay
-              className="w-full rounded-lg"
-            />
-            <div className="absolute bottom-2 left-2 text-white text-sm">
-              You
-            </div>
-          </div>
-          {callAccepted && (
-            <div className="relative">
-              <video
-                playsInline
-                ref={userVideo}
-                autoPlay
-                className="w-full rounded-lg"
-              />
-              <div className="absolute bottom-2 left-2 text-white text-sm">
-                {caller}
-              </div>
-            </div>
-          )}
-        </div>
+  const toggleAudio = () => {
+    if (localStream.current) {
+      const audioTrack = localStream.current.getAudioTracks()[0];
+      if (audioTrack) {
+        audioTrack.enabled = !audioTrack.enabled;
+        setIsAudioEnabled(audioTrack.enabled);
+      }
+    }
+  };
 
-        <div className="flex justify-center space-x-4">
+  const toggleScreenShare = async () => {
+    try {
+      if (!isScreenSharing) {
+        const stream = await navigator.mediaDevices.getDisplayMedia({
+          video: true
+        });
+        screenStream.current = stream;
+        
+        const videoTrack = stream.getVideoTracks()[0];
+        const sender = peerConnection.current
+          .getSenders()
+          .find(s => s.track.kind === 'video');
+        
+        if (sender) {
+          sender.replaceTrack(videoTrack);
+        }
+
+        videoTrack.onended = () => {
+          toggleScreenShare();
+        };
+
+        setIsScreenSharing(true);
+      } else {
+        const videoTrack = localStream.current.getVideoTracks()[0];
+        const sender = peerConnection.current
+          .getSenders()
+          .find(s => s.track.kind === 'video');
+        
+        if (sender) {
+          sender.replaceTrack(videoTrack);
+        }
+
+        screenStream.current.getTracks().forEach(track => track.stop());
+        screenStream.current = null;
+        setIsScreenSharing(false);
+      }
+    } catch (error) {
+      console.error('Error toggling screen share:', error);
+    }
+  };
+
+  const endCall = async () => {
+    try {
+      // Save call history
+      await axios.post('/api/call-history', {
+        roomId,
+        duration: callDuration,
+        type: isVideoEnabled ? 'video' : 'audio',
+        participants: participants.map(p => p.userId)
+      }, {
+        headers: {
+          Authorization: `Bearer ${user.token}`
+        }
+      });
+
+      cleanup();
+      navigate('/chat');
+    } catch (error) {
+      console.error('Error ending call:', error);
+    }
+  };
+
+  const cleanup = () => {
+    if (localStream.current) {
+      localStream.current.getTracks().forEach(track => track.stop());
+    }
+    if (screenStream.current) {
+      screenStream.current.getTracks().forEach(track => track.stop());
+    }
+    if (peerConnection.current) {
+      peerConnection.current.close();
+    }
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+    }
+    socket.emit('leave-room', { roomId, userId: user._id });
+  };
+
+  const startCallTimer = () => {
+    timerRef.current = setInterval(() => {
+      setCallDuration(prev => prev + 1);
+    }, 1000);
+  };
+
+  const formatDuration = (seconds) => {
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = seconds % 60;
+    return `${minutes.toString().padStart(2, '0')}:${remainingSeconds.toString().padStart(2, '0')}`;
+  };
+
+  return (
+    <div className="flex flex-col h-screen bg-gray-900">
+      {/* Video Grid */}
+      <div className="flex-1 grid grid-cols-2 gap-4 p-4">
+        <div className="relative rounded-lg overflow-hidden bg-gray-800">
+          <video
+            ref={localVideoRef}
+            autoPlay
+            muted
+            playsInline
+            className="w-full h-full object-cover"
+          />
+          <div className="absolute bottom-4 left-4 text-white text-sm">
+            You
+          </div>
+        </div>
+        <div className="relative rounded-lg overflow-hidden bg-gray-800">
+          <video
+            ref={remoteVideoRef}
+            autoPlay
+            playsInline
+            className="w-full h-full object-cover"
+          />
+        </div>
+      </div>
+
+      {/* Controls */}
+      <div className="bg-gray-800 p-4">
+        <div className="flex justify-center items-center space-x-4">
           <button
-            onClick={toggleMute}
+            onClick={toggleAudio}
             className={`p-3 rounded-full ${
-              isMuted ? 'bg-red-500' : 'bg-gray-700'
+              isAudioEnabled ? 'bg-blue-600' : 'bg-red-600'
             } text-white`}
-            title={isMuted ? 'Unmute' : 'Mute'}
           >
-            {isMuted ? (
+            {isAudioEnabled ? (
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
               </svg>
             ) : (
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
               </svg>
             )}
           </button>
@@ -211,25 +309,35 @@ const VideoCall = ({ roomId, onEndCall }) => {
           <button
             onClick={toggleVideo}
             className={`p-3 rounded-full ${
-              isVideoOff ? 'bg-red-500' : 'bg-gray-700'
+              isVideoEnabled ? 'bg-blue-600' : 'bg-red-600'
             } text-white`}
-            title={isVideoOff ? 'Turn on video' : 'Turn off video'}
           >
-            {isVideoOff ? (
+            {isVideoEnabled ? (
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
               </svg>
             ) : (
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
               </svg>
             )}
           </button>
 
           <button
-            onClick={leaveCall}
-            className="p-3 rounded-full bg-red-500 text-white"
-            title="End call"
+            onClick={toggleScreenShare}
+            className={`p-3 rounded-full ${
+              isScreenSharing ? 'bg-green-600' : 'bg-gray-600'
+            } text-white`}
+          >
+            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+            </svg>
+          </button>
+
+          <button
+            onClick={endCall}
+            className="p-3 rounded-full bg-red-600 text-white"
           >
             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 8l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2M5 3a2 2 0 00-2 2v1c0 8.284 6.716 15 15 15h1a2 2 0 002-2v-3.28a1 1 0 00-.684-.948l-4.493-1.498a1 1 0 00-1.21.502l-1.13 2.257a11.042 11.042 0 01-5.516-5.517l2.257-1.128a1 1 0 00.502-1.21L9.228 3.683A1 1 0 008.279 3H5z" />
@@ -237,23 +345,10 @@ const VideoCall = ({ roomId, onEndCall }) => {
           </button>
         </div>
 
-        {receivingCall && !callAccepted && (
-          <div className="mt-4 text-center">
-            <p className="text-white mb-2">{caller} is calling...</p>
-            <button
-              onClick={answerCall}
-              className="bg-green-500 text-white px-4 py-2 rounded-lg mr-2"
-            >
-              Answer
-            </button>
-            <button
-              onClick={rejectCall}
-              className="bg-red-500 text-white px-4 py-2 rounded-lg"
-            >
-              Decline
-            </button>
-          </div>
-        )}
+        {/* Call Duration */}
+        <div className="text-center text-white mt-2">
+          {formatDuration(callDuration)}
+        </div>
       </div>
     </div>
   );

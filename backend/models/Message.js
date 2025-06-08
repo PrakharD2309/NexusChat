@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const validateEnv = require('./config/validateEnv');
+const validateEnv = require('../config/validateEnv');
 
 // Validate environment variables at startup
 validateEnv();

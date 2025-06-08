@@ -15,10 +15,12 @@ function Login() {
     try {
       setError('');
       setLoading(true);
-      await login(email, password);
-      navigate('/chat');
+      const result = await login(email, password);
+      if (result.success) {
+        navigate('/chat', { replace: true });
+      }
     } catch (err) {
-      setError('Failed to sign in. Please check your credentials.');
+      setError(err.message || 'Failed to sign in. Please check your credentials.');
     }
     setLoading(false);
   };

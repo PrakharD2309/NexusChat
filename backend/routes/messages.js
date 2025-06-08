@@ -6,7 +6,8 @@ const auth = require('../middleware/auth');
 const upload = require('../middleware/upload');
 const pagination = require('../middleware/pagination');
 const contentFilter = require('../middleware/contentFilter');
-const { io } = require('../socket');
+const pushNotificationService = require('../services/pushNotificationService');
+const User = require('../models/User');
 
 // Get messages between two users
 router.get('/:userId', auth, pagination(), async (req, res) => {
@@ -82,7 +83,29 @@ router.post('/:userId', auth, upload.single('file'), async (req, res) => {
     await message.populate('recipient', 'name avatar');
 
     // Emit socket event
-    io.to(req.params.userId).emit('new_message', message);
+    const io = req.app.get('io');
+    if (io) {
+      io.to(req.params.userId).emit('new_message', message);
+    }
+
+    // Send push notification
+    try {
+      const recipient = await User.findById(req.params.userId);
+      if (recipient && recipient.fcmToken) {
+        await pushNotificationService.sendNotification(
+          recipient.fcmToken,
+          'New Message',
+          `${message.sender.name}: ${message.content}`,
+          {
+            messageId: message._id.toString(),
+            type: 'message'
+          }
+        );
+      }
+    } catch (notificationError) {
+      console.error('Failed to send notification:', notificationError);
+      // Don't fail the request if notification fails
+    }
 
     res.status(201).json(message);
   } catch (error) {
@@ -120,7 +143,10 @@ router.post('/group/:groupId', auth, upload.single('file'), async (req, res) => 
     // Emit socket event to all group members
     group.members.forEach(member => {
       if (member.user.toString() !== req.user._id.toString()) {
-        io.to(member.user.toString()).emit('new_group_message', message);
+        const io = req.app.get('io');
+        if (io) {
+          io.to(member.user.toString()).emit('new_group_message', message);
+        }
       }
     });
 
@@ -171,6 +197,7 @@ router.post('/:messageId/forward', auth, async (req, res) => {
     }
 
     // Emit socket event
+    const io = req.app.get('io');
     if (message.recipient) {
       io.to(message.recipient.toString()).emit('new_message', message);
     } else {
@@ -204,6 +231,7 @@ router.post('/:messageId/reactions', auth, async (req, res) => {
     await message.populate('reactions.user', 'name avatar');
 
     // Emit socket event
+    const io = req.app.get('io');
     if (message.recipient) {
       io.to(message.recipient.toString()).emit('message_reaction', {
         messageId: message._id,
@@ -241,6 +269,7 @@ router.delete('/:messageId/reactions', auth, async (req, res) => {
     await message.save();
 
     // Emit socket event
+    const io = req.app.get('io');
     if (message.recipient) {
       io.to(message.recipient.toString()).emit('message_reaction_removed', {
         messageId: message._id,
@@ -290,6 +319,7 @@ router.put('/:messageId', auth, async (req, res) => {
     await message.save();
 
     // Emit socket event
+    const io = req.app.get('io');
     if (message.recipient) {
       io.to(message.recipient.toString()).emit('message_edited', message);
     } else if (message.group) {
@@ -332,6 +362,7 @@ router.delete('/:messageId', auth, async (req, res) => {
     await message.save();
 
     // Emit socket event
+    const io = req.app.get('io');
     if (message.recipient) {
       io.to(message.recipient.toString()).emit('message_deleted', {
         messageId: message._id,
@@ -431,7 +462,10 @@ router.post('/', [auth, contentFilter], async (req, res) => {
     await message.save();
     
     // Emit socket event
-    io.to(message.recipient.toString()).emit('new_message', message);
+    const io = req.app.get('io');
+    if (io) {
+      io.to(message.recipient.toString()).emit('new_message', message);
+    }
     
     res.status(201).json(message);
   } catch (error) {
@@ -481,7 +515,10 @@ router.put('/:messageId', [auth, contentFilter], async (req, res) => {
     await message.save();
     
     // Emit socket event
-    io.to(message.recipient.toString()).emit('message_updated', message);
+    const io = req.app.get('io');
+    if (message.recipient) {
+      io.to(message.recipient.toString()).emit('message_updated', message);
+    }
     
     res.json(message);
   } catch (error) {
@@ -503,7 +540,10 @@ router.delete('/:messageId', auth, async (req, res) => {
     await message.deleteForUser(req.user._id);
     
     // Emit socket event
-    io.to(message.recipient.toString()).emit('message_deleted', message._id);
+    const io = req.app.get('io');
+    if (message.recipient) {
+      io.to(message.recipient.toString()).emit('message_deleted', message._id);
+    }
     
     res.json({ message: 'Message deleted successfully' });
   } catch (error) {
@@ -522,7 +562,10 @@ router.post('/:messageId/pin', auth, async (req, res) => {
     await message.pin(req.user._id);
     
     // Emit socket event
-    io.to(message.recipient.toString()).emit('message_pinned', message);
+    const io = req.app.get('io');
+    if (io) {
+      io.to(message.recipient.toString()).emit('message_pinned', message);
+    }
     
     res.json(message);
   } catch (error) {
@@ -541,7 +584,10 @@ router.post('/:messageId/unpin', auth, async (req, res) => {
     await message.unpin();
     
     // Emit socket event
-    io.to(message.recipient.toString()).emit('message_unpinned', message);
+    const io = req.app.get('io');
+    if (io) {
+      io.to(message.recipient.toString()).emit('message_unpinned', message);
+    }
     
     res.json(message);
   } catch (error) {
@@ -560,7 +606,10 @@ router.post('/:messageId/thread', auth, async (req, res) => {
     await message.createThread();
     
     // Emit socket event
-    io.to(message.recipient.toString()).emit('thread_created', message);
+    const io = req.app.get('io');
+    if (io) {
+      io.to(message.recipient.toString()).emit('thread_created', message);
+    }
     
     res.json(message);
   } catch (error) {
@@ -594,7 +643,10 @@ router.post('/:messageId/schedule', auth, async (req, res) => {
     await message.schedule(new Date(req.body.scheduledTime));
     
     // Emit socket event
-    io.to(message.recipient.toString()).emit('message_scheduled', message);
+    const io = req.app.get('io');
+    if (io) {
+      io.to(message.recipient.toString()).emit('message_scheduled', message);
+    }
     
     res.json(message);
   } catch (error) {

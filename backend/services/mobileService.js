@@ -330,4 +330,5 @@ class MobileService {
   }
 }
 
+// Export an instance of the service
 module.exports = new MobileService(); 

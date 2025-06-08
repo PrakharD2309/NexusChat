@@ -1,10 +1,24 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import axios from 'axios';
 
+// Configure axios defaults
+const api = axios.create({
+  baseURL: import.meta.env.VITE_API_URL || 'http://localhost:5000',
+  headers: {
+    'Content-Type': 'application/json',
+    'Accept': 'application/json'
+  },
+  family: 4 // Force IPv4
+});
+
 const AuthContext = createContext();
 
 export const useAuth = () => {
-  return useContext(AuthContext);
+  const context = useContext(AuthContext);
+  if (!context) {
+    throw new Error('useAuth must be used within an AuthProvider');
+  }
+  return context;
 };
 
 export const AuthProvider = ({ children }) => {
@@ -13,6 +27,7 @@ export const AuthProvider = ({ children }) => {
 
   useEffect(() => {
     const token = localStorage.getItem('token');
+    console.log('Initial token check:', token ? 'Token exists' : 'No token');
     if (token) {
       checkAuth(token);
     } else {
@@ -22,15 +37,18 @@ export const AuthProvider = ({ children }) => {
 
   const checkAuth = async (token) => {
     try {
-      const response = await axios.get(`${import.meta.env.VITE_API_URL}/api/auth/me`, {
+      console.log('Checking auth with token:', token.substring(0, 10) + '...');
+      const response = await api.get('/api/auth/me', {
         headers: {
           Authorization: `Bearer ${token}`
         }
       });
+      console.log('Auth check response:', response.data);
       setUser({ ...response.data, token });
     } catch (error) {
-      console.error('Auth check failed:', error);
+      console.error('Auth check failed:', error.response?.data || error.message);
       localStorage.removeItem('token');
+      setUser(null);
     } finally {
       setLoading(false);
     }
@@ -38,63 +56,66 @@ export const AuthProvider = ({ children }) => {
 
   const login = async (email, password) => {
     try {
-      const response = await axios.post(`${import.meta.env.VITE_API_URL}/api/auth/login`, {
+      console.log('Attempting login for:', email);
+      setLoading(true);
+      const response = await api.post('/api/auth/login', {
         email,
         password
       });
-      const { token, ...userData } = response.data;
+      console.log('Login response:', response.data);
+      const { token, user } = response.data;
       localStorage.setItem('token', token);
-      setUser({ ...userData, token });
+      setUser({ ...user, token });
       return { success: true };
     } catch (error) {
-      console.error('Login failed:', error);
-      return {
-        success: false,
-        error: error.response?.data?.message || 'Login failed'
-      };
+      console.error('Login failed:', error.response?.data || error.message);
+      throw new Error(error.response?.data?.message || 'Login failed');
+    } finally {
+      setLoading(false);
     }
   };
 
   const register = async (userData) => {
     try {
-      const response = await axios.post(`${import.meta.env.VITE_API_URL}/api/auth/register`, userData);
-      const { token, ...user } = response.data;
+      console.log('Attempting registration:', userData);
+      setLoading(true);
+      const response = await api.post('/api/auth/register', userData);
+      console.log('Registration response:', response.data);
+      const { token, user } = response.data;
       localStorage.setItem('token', token);
       setUser({ ...user, token });
       return { success: true };
     } catch (error) {
-      console.error('Registration failed:', error);
-      return {
-        success: false,
-        error: error.response?.data?.message || 'Registration failed'
-      };
+      console.error('Registration failed:', error.response?.data || error.message);
+      throw new Error(error.response?.data?.message || 'Registration failed');
+    } finally {
+      setLoading(false);
     }
   };
 
   const logout = () => {
+    console.log('Logging out user');
     localStorage.removeItem('token');
     setUser(null);
   };
 
   const updateProfile = async (profileData) => {
     try {
-      const response = await axios.put(
-        `${import.meta.env.VITE_API_URL}/api/users/profile`,
-        profileData,
-        {
-          headers: {
-            Authorization: `Bearer ${user.token}`
-          }
+      console.log('Updating profile:', profileData);
+      setLoading(true);
+      const response = await api.put('/api/users/profile', profileData, {
+        headers: {
+          Authorization: `Bearer ${user.token}`
         }
-      );
+      });
+      console.log('Profile update response:', response.data);
       setUser({ ...user, ...response.data });
       return { success: true };
     } catch (error) {
-      console.error('Profile update failed:', error);
-      return {
-        success: false,
-        error: error.response?.data?.message || 'Profile update failed'
-      };
+      console.error('Profile update failed:', error.response?.data || error.message);
+      throw new Error(error.response?.data?.message || 'Profile update failed');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -109,7 +130,7 @@ export const AuthProvider = ({ children }) => {
 
   return (
     <AuthContext.Provider value={value}>
-      {!loading && children}
+      {children}
     </AuthContext.Provider>
   );
 };
